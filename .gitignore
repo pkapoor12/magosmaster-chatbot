@@ -214,3 +214,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# llama.cpp
+llama.cpp/
+
+# Base phi-4-mini-instruct model
+Phi-4-mini-instruct/

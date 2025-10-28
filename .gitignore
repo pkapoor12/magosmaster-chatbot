@@ -218,5 +218,6 @@ __marimo__/
 # llama.cpp
 llama.cpp/
 
-# Base phi-4-mini-instruct model
+# Language model weights
 Phi-4-mini-instruct/
+.gguf

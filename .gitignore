@@ -220,4 +220,4 @@ llama.cpp/
 
 # Language model weights
 Phi-4-mini-instruct/
-.gguf
+models/*.gguf

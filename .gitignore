@@ -221,3 +221,6 @@ llama.cpp/
 # Language model weights
 Phi-4-mini-instruct/
 models/*.gguf
+
+# Benchmarking results
+models/eval/benchmark_results.json

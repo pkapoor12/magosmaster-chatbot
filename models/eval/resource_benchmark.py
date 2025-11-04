@@ -3,13 +3,13 @@ GGUF Model Benchmarking Script with llama-cpp-python
 Measures TTFT, generation speed, memory usage, and more
 """
 import os
-from benchmark_utils import ModelBenchmark
+from benchmark_utils import ModelBenchmark, get_model_paths
 
 def main():
-    """Example usage"""
+    """Run resource benchmark on models"""
     
     # Configuration
-    models = ModelBenchmark.get_model_paths()
+    models = get_model_paths()
     
     prompts = [
         "Write a short poem about AI.",

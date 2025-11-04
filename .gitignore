@@ -222,5 +222,7 @@ llama.cpp/
 Phi-4-mini-instruct/
 models/*.gguf
 
-# Benchmarking results
+# Benchmarking results and dataset
 models/eval/benchmark_results.json
+models/eval/accuracy_results.json
+models/eval/evaluation_set.json

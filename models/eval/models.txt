@@ -1,5 +1,5 @@
 ../phi-4-Q3_K_S.gguf
-../MiniCPM-V-4_5-Q4_K_M.gguf
+../MiniCPM-S-1B-f16.gguf
 ../Qwen2.5-7B-Instruct-1M-Q4_K_M.gguf
 ../llava-phi2-3B-Q4_K_M.gguf
 ../TinyLlama-1.1B-Chat-v1.0-f16.gguf

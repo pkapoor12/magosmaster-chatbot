@@ -223,6 +223,5 @@ Phi-4-mini-instruct/
 models/*.gguf
 
 # Benchmarking results and dataset
-models/eval/benchmark_results.json
-models/eval/accuracy_results.json
-models/eval/evaluation_set.json
+models/eval/*.json
+models/eval/*.log

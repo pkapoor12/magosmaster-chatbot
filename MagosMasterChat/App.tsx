@@ -141,9 +141,18 @@ const App = () => {
         const downloadResult = RNFS.downloadFile({
           fromUrl: MODEL_URL,
           toFile: MODEL_PATH,
+          background: true,       // Allow continuation in background (iOS specific)
+          discretionary: false,   // false = urgent, tries to use more resources immediately
+          progressDivider: 1,
+          begin: (res) => {
+            console.log('Download started, size:', res.contentLength);
+          },
           progress: (res) => {
-            const progress = res.bytesWritten / res.contentLength;
-            setDownloadProgress(progress);
+            // Your existing progress logic
+            const percentage = (res.bytesWritten / res.contentLength) * 100;
+            // Only log every 5% to avoid spamming the console and slowing down the JS thread
+            if (percentage % 5 < 1) console.log(`Progress: ${percentage.toFixed(0)}%`);
+            setDownloadProgress(res.bytesWritten / res.contentLength);
           },
         });
 

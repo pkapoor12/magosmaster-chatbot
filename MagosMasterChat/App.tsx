@@ -183,8 +183,8 @@ const App = () => {
       console.log('Initializing Llama context...');
       const context = await initLlama({
         model: MODEL_PATH,
-        use_mlock: true,
-        n_ctx: 2048,
+        use_mlock: false,
+        n_ctx: 512,
         n_gpu_layers: 99,
       });
       

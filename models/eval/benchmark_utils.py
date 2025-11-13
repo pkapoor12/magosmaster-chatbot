@@ -3,10 +3,11 @@ import time
 import psutil
 import os
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from sentence_transformers import SentenceTransformer, util
 import statistics
+import re
 
 def get_model_paths() -> List[str]:
     """Read relative model paths"""
@@ -56,6 +57,16 @@ class EvaluationResult:
     expected_answer: str
     predicted_answer: str
     similarity_score: float
+    correct: bool
+
+@dataclass
+class MMLUResult:
+    model_name: str
+    subject: str
+    question: str
+    choices: List[str]
+    correct_answer: str
+    predicted_answer: str
     correct: bool
 
 class ModelBenchmark:
@@ -487,3 +498,365 @@ class ModelEvaluation:
             mean_sim = statistics.mean(r.similarity_score for r in results)
             
             print(f"{model_name:<40} {accuracy:>6.2f}%     {mean_sim:>6.3f}")
+
+class MMLUEvaluation:
+    """Evaluates models on MMLU (Massive Multitask Language Understanding) benchmark"""
+    
+    def __init__(self, n_ctx: int = 2048, n_threads: int = 4, n_gpu_layers: int = 0):
+        """
+        Initialize MMLU evaluation configuration
+        
+        Args:
+            n_ctx: Context window size
+            n_threads: Number of CPU threads
+            n_gpu_layers: Number of layers to offload to GPU (0 for CPU-only)
+        """
+        self.n_ctx = n_ctx
+        self.n_threads = n_threads
+        self.n_gpu_layers = n_gpu_layers
+    
+    def load_mmlu_dataset(
+        self, 
+        subjects: str | List[str] = 'all',
+        split: str = 'test',
+        num_samples: Optional[int] = None
+    ) -> Dict[str, List[Dict]]:
+        """
+        Load MMLU dataset from local JSON files or download from HuggingFace.
+        
+        Args:
+            subjects: 'all' or list of specific subjects to load
+            split: 'test', 'validation', or 'dev'
+            num_samples: Number of samples per subject (None for all)
+        
+        Returns:
+            Dictionary mapping subject names to lists of questions
+        """
+        mmlu_data = {}
+        
+        # Try to load from local file first
+        local_file = f'mmlu_{split}.json'
+        if os.path.exists(local_file):
+            print(f"Loading MMLU data from local file: {local_file}")
+            with open(local_file, 'r', encoding='utf-8') as f:
+                mmlu_data = json.load(f)
+        else:
+            # Download from HuggingFace datasets
+            try:
+                from datasets import load_dataset
+                print(f"Downloading MMLU dataset from HuggingFace (split: {split})...")
+                dataset = load_dataset("cais/mmlu", "all", split=split)
+                
+                # Group by subject
+                for item in dataset:
+                    subject = item['subject']
+                    if subject not in mmlu_data:
+                        mmlu_data[subject] = []
+                    
+                    mmlu_data[subject].append({
+                        'question': item['question'],
+                        'choices': item['choices'],
+                        'answer': item['answer']  # Index of correct answer (0-3)
+                    })
+                
+                # Save for future use
+                with open(local_file, 'w', encoding='utf-8') as f:
+                    json.dump(mmlu_data, f, indent=2)
+                print(f"Saved MMLU data to: {local_file}")
+                
+            except ImportError:
+                print("Error: 'datasets' library not installed. Install with: pip install datasets")
+                print("Or manually create a mmlu_test.json file with the MMLU dataset.")
+                return {}
+        
+        # Filter subjects if specified
+        if subjects != 'all':
+            if isinstance(subjects, str):
+                subjects = [subjects]
+            mmlu_data = {k: v for k, v in mmlu_data.items() if k in subjects}
+        
+        # Limit number of samples per subject
+        if num_samples is not None:
+            mmlu_data = {k: v[:num_samples] for k, v in mmlu_data.items()}
+        
+        return mmlu_data
+    
+    def format_mmlu_prompt(self, question: str, choices: List[str]) -> str:
+        """
+        Format MMLU question into a prompt for the model.
+        
+        Args:
+            question: The question text
+            choices: List of 4 answer choices
+        
+        Returns:
+            Formatted prompt string
+        """
+        prompt = f"""Answer the following multiple choice question by selecting the correct letter (A, B, C, or D).
+
+Question: {question}
+
+A. {choices[0]}
+B. {choices[1]}
+C. {choices[2]}
+D. {choices[3]}
+
+Answer: """
+        return prompt
+    
+    def extract_answer(self, response: str) -> str:
+        """
+        Extract answer letter (A, B, C, or D) from model response.
+        
+        Args:
+            response: Model's text response
+        
+        Returns:
+            Single letter answer (A, B, C, or D), or empty string if none found
+        """
+        # Clean response
+        response = response.strip().upper()
+        
+        # Look for explicit letter at start
+        if response and response[0] in 'ABCD':
+            return response[0]
+        
+        # Look for pattern like "The answer is A" or "(A)"
+        match = re.search(r'\b([ABCD])\b', response)
+        if match:
+            return match.group(1)
+        
+        return ''
+    
+    def evaluate_model(
+        self,
+        model_path: str,
+        mmlu_data: Dict[str, List[Dict]],
+        max_tokens: int = 10,
+        temperature: float = 0.0
+    ) -> Dict[str, List[MMLUResult]]:
+        """
+        Evaluate a model on MMLU dataset.
+        
+        Args:
+            model_path: Path to GGUF model file
+            mmlu_data: Dictionary of MMLU questions by subject
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+        
+        Returns:
+            Dictionary mapping subjects to lists of MMLUResult objects
+        """
+        # Load model
+        print(f"\n{'='*80}")
+        print(f"Loading model: {os.path.basename(model_path)}")
+        print(f"{'='*80}")
+        
+        llm = Llama(
+            model_path=model_path,
+            n_ctx=self.n_ctx,
+            n_threads=self.n_threads,
+            n_gpu_layers=self.n_gpu_layers,
+            verbose=False
+        )
+        
+        model_name = os.path.basename(model_path)
+        all_results = {}
+        total_correct = 0
+        total_questions = 0
+        
+        # Evaluate each subject
+        for subject, questions in mmlu_data.items():
+            print(f"\nEvaluating subject: {subject} ({len(questions)} questions)")
+            subject_results = []
+            subject_correct = 0
+            
+            for i, item in enumerate(questions, 1):
+                question = item['question']
+                choices = item['choices']
+                correct_idx = item['answer']
+                correct_letter = chr(65 + correct_idx)  # Convert 0-3 to A-D
+                
+                # Format prompt and generate answer
+                prompt = self.format_mmlu_prompt(question, choices)
+                output = llm(
+                    prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    echo=False
+                )
+                
+                response = output['choices'][0]['text'].strip()
+                predicted_letter = self.extract_answer(response)
+                
+                # Check if correct
+                is_correct = (predicted_letter == correct_letter)
+                if is_correct:
+                    subject_correct += 1
+                    total_correct += 1
+                
+                total_questions += 1
+                
+                # Store result
+                result = MMLUResult(
+                    model_name=model_name,
+                    subject=subject,
+                    question=question,
+                    choices=choices,
+                    correct_answer=correct_letter,
+                    predicted_answer=predicted_letter,
+                    correct=is_correct
+                )
+                subject_results.append(result)
+                
+                # Progress update
+                if i % 10 == 0 or i == len(questions):
+                    subject_acc = (subject_correct / i) * 100
+                    print(f"  Progress: {i}/{len(questions)} | Accuracy: {subject_acc:.2f}%")
+            
+            all_results[subject] = subject_results
+        
+        # Cleanup
+        del llm
+        
+        # Print overall accuracy
+        overall_acc = (total_correct / total_questions * 100) if total_questions > 0 else 0
+        print(f"\n{'='*80}")
+        print(f"Overall Accuracy: {overall_acc:.2f}% ({total_correct}/{total_questions})")
+        print(f"{'='*80}")
+        
+        return all_results
+    
+    def print_results(self, all_model_results: Dict[str, Dict[str, List[MMLUResult]]]):
+        """Print formatted MMLU results"""
+        print(f"\n{'='*80}")
+        print("MMLU EVALUATION RESULTS")
+        print(f"{'='*80}\n")
+        
+        for model_path, subject_results in all_model_results.items():
+            model_name = os.path.basename(model_path)
+            print(f"\nModel: {model_name}")
+            print(f"-" * 80)
+            print(f"{'Subject':<35} {'Correct':<10} {'Total':<10} {'Accuracy':<10}")
+            print(f"-" * 80)
+            
+            total_correct = 0
+            total_questions = 0
+            
+            for subject, results in sorted(subject_results.items()):
+                correct = sum(1 for r in results if r.correct)
+                total = len(results)
+                accuracy = (correct / total * 100) if total > 0 else 0
+                
+                total_correct += correct
+                total_questions += total
+                
+                subject_name = subject[:33] if len(subject) > 35 else subject
+                print(f"{subject_name:<35} {correct:<10} {total:<10} {accuracy:>6.2f}%")
+            
+            overall_acc = (total_correct / total_questions * 100) if total_questions > 0 else 0
+            print(f"-" * 80)
+            print(f"{'OVERALL':<35} {total_correct:<10} {total_questions:<10} {overall_acc:>6.2f}%")
+            print()
+    
+    def save_results(self, all_model_results: Dict[str, Dict[str, List[MMLUResult]]], output_file: str):
+        """Save MMLU results to JSON file"""
+        json_results = {}
+        
+        for model_path, subject_results in all_model_results.items():
+            model_name = os.path.basename(model_path)
+            
+            model_data = {
+                'subjects': {},
+                'overall': {}
+            }
+            
+            total_correct = 0
+            total_questions = 0
+            
+            # Process each subject
+            for subject, results in subject_results.items():
+                correct = sum(1 for r in results if r.correct)
+                total = len(results)
+                accuracy = (correct / total * 100) if total > 0 else 0
+                
+                total_correct += correct
+                total_questions += total
+                
+                model_data['subjects'][subject] = {
+                    'correct': correct,
+                    'total': total,
+                    'accuracy': accuracy,
+                    'results': [asdict(r) for r in results]
+                }
+            
+            # Overall statistics
+            overall_acc = (total_correct / total_questions * 100) if total_questions > 0 else 0
+            model_data['overall'] = {
+                'correct': total_correct,
+                'total': total_questions,
+                'accuracy': overall_acc
+            }
+            
+            json_results[model_name] = model_data
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(json_results, f, indent=2)
+        
+        print(f"\nResults saved to: {output_file}")
+    
+    def compare_models(self, all_model_results: Dict[str, Dict[str, List[MMLUResult]]]):
+        """Print side-by-side comparison of models on MMLU"""
+        print(f"\n{'='*80}")
+        print("MODEL COMPARISON - MMLU")
+        print(f"{'='*80}\n")
+        
+        # Calculate overall accuracies
+        model_accuracies = []
+        for model_path, subject_results in all_model_results.items():
+            model_name = os.path.basename(model_path)[:38]
+            total_correct = sum(sum(1 for r in results if r.correct) 
+                              for results in subject_results.values())
+            total_questions = sum(len(results) for results in subject_results.values())
+            accuracy = (total_correct / total_questions * 100) if total_questions > 0 else 0
+            
+            model_accuracies.append((model_name, accuracy, total_correct, total_questions))
+        
+        # Sort by accuracy (descending)
+        model_accuracies.sort(key=lambda x: x[1], reverse=True)
+        
+        print(f"{'Model':<40} {'Accuracy':<12} {'Correct/Total':<15}")
+        print(f"-" * 80)
+        
+        for model_name, accuracy, correct, total in model_accuracies:
+            print(f"{model_name:<40} {accuracy:>6.2f}%     {correct}/{total}")
+        
+        # Subject-level comparison if multiple subjects
+        all_subjects = set()
+        for subject_results in all_model_results.values():
+            all_subjects.update(subject_results.keys())
+        
+        if len(all_subjects) > 1:
+            print(f"\n{'='*80}")
+            print("SUBJECT-LEVEL COMPARISON")
+            print(f"{'='*80}\n")
+            
+            for subject in sorted(all_subjects):
+                print(f"\nSubject: {subject}")
+                print(f"-" * 80)
+                print(f"{'Model':<40} {'Accuracy':<12}")
+                print(f"-" * 80)
+                
+                subject_accuracies = []
+                for model_path, subject_results in all_model_results.items():
+                    if subject in subject_results:
+                        model_name = os.path.basename(model_path)[:38]
+                        results = subject_results[subject]
+                        correct = sum(1 for r in results if r.correct)
+                        total = len(results)
+                        accuracy = (correct / total * 100) if total > 0 else 0
+                        subject_accuracies.append((model_name, accuracy))
+                
+                subject_accuracies.sort(key=lambda x: x[1], reverse=True)
+                for model_name, accuracy in subject_accuracies:
+                    print(f"{model_name:<40} {accuracy:>6.2f}%")

@@ -1,4 +1,7 @@
 {
   "name": "MagosMasterChat",
-  "displayName": "MagosMasterChat"
+  "displayName": "MagosMasterChat",
+  "plugins": [
+    "expo-speech-recognition"
+  ]
 }

@@ -10,7 +10,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   FlatList,
-  ActivityIndicator,
   NativeModules,
   PermissionsAndroid, // Needed for Android Permission checks
 } from 'react-native';
@@ -18,6 +17,15 @@ import RNFS from 'react-native-fs';
 import { initWhisper } from 'whisper.rn';
 import AudioRecord from 'react-native-audio-record'; // <--- NEW LIGHTWEIGHT LIBRARY
 import { Buffer } from 'buffer'; // Often needed for file handling
+
+import LoadingScreen from './components/LoadingScreen';
+import DownloadScreen from './components/DownloadScreen';
+import ErrorScreen from './components/ErrorScreen';
+import MessageBubble from './components/MessageBubble';
+import TTSControl from './components/TTSControl';
+import LanguageSelector from './components/LanguageSelector';
+import { Message } from './types';
+import { useTTS } from './hooks/useTTS';
 
 // Import llama.rn with proper error handling
 let initLlama: any;
@@ -29,12 +37,6 @@ try {
 }
 
 // --- Types & State ---
-interface Message {
-  id: string;
-  text: string;
-  sender: 'user' | 'bot';
-}
-
 type AppState = 'checking' | 'downloading' | 'loading_model' | 'ready' | 'error';
 type TokenData = { token: string };
 type LlamaContext = any;
@@ -48,49 +50,6 @@ const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/${MODEL_FILENAME}`;
 // Whisper Model (Tiny En) - ~75MB
 const WHISPER_MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin';
 const WHISPER_MODEL_PATH = `${RNFS.DocumentDirectoryPath}/ggml-tiny.en.bin`;
-
-// --- UI Components ---
-const LoadingScreen = () => (
-  <View style={styles.loadingContainer}>
-    <ActivityIndicator size="large" color="#007aff" />
-    <Text style={styles.loadingText}>Loading AI Models...</Text>
-  </View>
-);
-
-const DownloadScreen = ({ progress }: { progress: number }) => (
-  <View style={styles.loadingContainer}>
-    <ActivityIndicator size="large" color="#007aff" />
-    <Text style={styles.loadingText}>Downloading AI Model...</Text>
-    <Text style={styles.loadingText}>{(progress * 100).toFixed(0)}%</Text>
-    <Text style={styles.downloadHintText}>This is a one-time download.</Text>
-  </View>
-);
-
-const ErrorScreen = ({ message, onRetry }: { message: string; onRetry?: () => void }) => (
-  <View style={styles.loadingContainer}>
-    <Text style={styles.errorIcon}>⚠️</Text>
-    <Text style={styles.loadingText}>Error</Text>
-    <Text style={styles.errorText}>{message}</Text>
-    {onRetry && (
-      <TouchableOpacity style={styles.retryButton} onPress={onRetry}>
-        <Text style={styles.retryButtonText}>Retry</Text>
-      </TouchableOpacity>
-    )}
-  </View>
-);
-
-const MessageBubble = ({ message }: { message: Message }) => {
-  const isUser = message.sender === 'user';
-  return (
-    <View style={[styles.messageRow, isUser ? styles.userMessageRow : styles.botMessageRow]}>
-      <View style={[styles.messageBubble, isUser ? styles.userMessageBubble : styles.botMessageBubble]}>
-        <Text textBreakStrategy="simple" style={isUser ? styles.userMessageText : styles.botMessageText}>
-          {message.text}
-        </Text>
-      </View>
-    </View>
-  );
-};
 
 // --- Main App ---
 const App = () => {
@@ -107,6 +66,19 @@ const App = () => {
   const [isRecording, setIsRecording] = useState(false);
   
   const flatListRef = useRef<FlatList<Message>>(null);
+  
+  // TTS Hook
+  const { 
+    isTTSEnabled, 
+    isSpeaking, 
+    currentLanguage,
+    toggleTTS, 
+    stopSpeaking, 
+    speakToken,
+    finishSpeaking,
+    resetBuffer,
+    setLanguage 
+  } = useTTS();
 
   // 1. Initialize Audio Recorder
   useEffect(() => {
@@ -254,6 +226,10 @@ const App = () => {
       await AudioRecord.stop();
     }
 
+    // Stop any ongoing TTS and reset buffer
+    stopSpeaking();
+    resetBuffer();
+
     const textInput = input.trim(); // Capture input before clearing
     const userMessage: Message = { id: `user-${Date.now()}`, text: textInput, sender: 'user' };
     
@@ -291,6 +267,9 @@ const App = () => {
           stop: ['<|end|>', '<|user|>'],
         },
         (data: TokenData) => {
+          // Speak token in real-time if TTS is enabled
+          speakToken(data.token);
+          
           setMessages(prev => {
             const index = prev.findIndex(msg => msg.id === botMessageId);
             if (index === -1) return prev;
@@ -305,25 +284,41 @@ const App = () => {
           });
         }
       );
+      
+      // After all tokens are generated, speak any remaining buffered text
+      finishSpeaking();
     } catch (e: any) {
       console.error(e);
+      resetBuffer();
     } finally {
       setIsGenerating(false);
     }
   };
-
-  // ... (Keep Styles and Render logic same as before) ...
   
-  if (appState === 'checking' || appState === 'loading_model' || appState === 'downloading') return <LoadingScreen />;
+  if (appState === 'downloading') return <DownloadScreen progress={downloadProgress} />;
+  if (appState === 'checking' || appState === 'loading_model') return <LoadingScreen />;
   if (appState === 'error') return <ErrorScreen message={errorMessage} onRetry={setupModels} />;
 
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboardAvoidingView}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Magos Voice AI</Text>
-          <Text style={styles.headerSubtitle}>Local Whisper + Llama</Text>
+          <View style={styles.headerLeft}>
+            <Text style={styles.headerTitle}>Magos Voice AI</Text>
+            <Text style={styles.headerSubtitle}>Local Whisper + Llama</Text>
+          </View>
+          <TTSControl
+            isTTSEnabled={isTTSEnabled}
+            isSpeaking={isSpeaking}
+            onToggleTTS={toggleTTS}
+            onStopSpeaking={stopSpeaking}
+          />
         </View>
+
+        <LanguageSelector
+          currentLanguage={currentLanguage}
+          onLanguageChange={setLanguage}
+        />
 
         <FlatList
           ref={flatListRef}
@@ -370,39 +365,25 @@ const App = () => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   keyboardAvoidingView: { flex: 1 },
-  header: { paddingVertical: 15, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: '#e0e0e0', backgroundColor: '#f9f9f9' },
+  header: { 
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 15, 
+    paddingHorizontal: 20, 
+    borderBottomWidth: 1, 
+    borderBottomColor: '#e0e0e0', 
+    backgroundColor: '#f9f9f9' 
+  },
+  headerLeft: {
+    flex: 1,
+  },
   headerTitle: { fontSize: 20, fontWeight: '700', color: '#333' },
   headerSubtitle: { fontSize: 12, color: '#666', marginTop: 2 },
   
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#ffffff', padding: 20 },
-  loadingText: { marginTop: 15, fontSize: 18, color: '#333', fontWeight: '600' },
-  downloadHintText: { marginTop: 10, fontSize: 14, color: '#666', textAlign: 'center', paddingHorizontal: 40 },
-  errorIcon: { fontSize: 64, marginBottom: 15 },
-  errorText: { marginTop: 10, fontSize: 14, color: '#ff3b30', textAlign: 'center', paddingHorizontal: 40 },
-  retryButton: { marginTop: 20, backgroundColor: '#007aff', paddingVertical: 12, paddingHorizontal: 30, borderRadius: 25 },
-  retryButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-
   chatArea: { flex: 1, backgroundColor: '#fff' },
   chatContentContainer: { paddingHorizontal: 15, paddingTop: 15, paddingBottom: 15, flexGrow: 1 },
   
-  messageRow: { flexDirection: 'row', marginVertical: 6 },
-  userMessageRow: { justifyContent: 'flex-end' },
-  botMessageRow: { justifyContent: 'flex-start' },
-  
-  messageBubble: { 
-    maxWidth: '80%', 
-    paddingVertical: 12, 
-    paddingHorizontal: 16, 
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'transparent',
-  },
-  userMessageBubble: { backgroundColor: '#007aff', borderBottomRightRadius: 4 },
-  botMessageBubble: { backgroundColor: '#e5e5ea', borderBottomLeftRadius: 4 },
-  
-  userMessageText: { fontSize: 16, color: '#ffffff', marginBottom: 2 },
-  botMessageText: { fontSize: 16, color: '#000000', marginBottom: 2 },
-
   inputContainer: { flexDirection: 'row', alignItems: 'flex-end', padding: 12, borderTopWidth: 1, borderTopColor: '#e0e0e0', backgroundColor: '#fff' },
   
   micButton: { justifyContent: 'center', alignItems: 'center', height: 40, width: 40, marginRight: 8 },

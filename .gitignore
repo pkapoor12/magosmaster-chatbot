@@ -154,6 +154,7 @@ activemq-data/
 env/
 venv/
 ENV/
+*env/
 env.bak/
 venv.bak/
 
@@ -225,3 +226,5 @@ models/*.gguf
 # Benchmarking results and dataset
 models/eval/*.json
 models/eval/*.log
+*.out
+*.err

@@ -1,3 +1,4 @@
 llama-cpp-python
 psutil
 sentence-transformers
+datasets

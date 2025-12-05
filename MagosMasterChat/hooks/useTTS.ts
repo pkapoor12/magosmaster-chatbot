@@ -58,12 +58,35 @@ export const useTTS = (): UseTTSReturn => {
       
       // Get available voices and select a male voice for the language
       const voices = await Tts.voices();
-      console.log('Available voices:', voices);
+      console.log(`Setting TTS language to: ${language}`);
+      console.log('Total available voices:', voices.length);
       
       // Filter voices for the selected language
-      const languageVoices = voices.filter((v: any) => 
-        v.language.toLowerCase().startsWith(language.toLowerCase().split('-')[0])
-      );
+      // First try exact match, then fall back to language prefix (for cases where voices don't have region codes)
+      const languageVoices = voices.filter((v: any) => {
+        const voiceLang = v.language.toLowerCase();
+        const targetLang = language.toLowerCase();
+        const targetPrefix = targetLang.split('-')[0];
+        
+        // Exact match (e.g., zh-CN matches zh-CN)
+        if (voiceLang === targetLang) return true;
+        
+        // For Chinese, check if it's specifically CN or TW
+        if (targetPrefix === 'zh') {
+          // Match zh-CN with zh-cn, cmn-CN, zh-Hans-CN, etc.
+          if (targetLang.includes('cn') && voiceLang.includes('cn')) return true;
+          // Match zh-TW with zh-tw, cmn-TW, zh-Hant-TW, etc.
+          if (targetLang.includes('tw') && voiceLang.includes('tw')) return true;
+          // If voice is just "zh" without region, only use it if no specific match found
+          return false;
+        }
+        
+        // For other languages, prefix match is fine (e.g., en for en-US, en-GB)
+        return voiceLang.startsWith(targetPrefix);
+      });
+      
+      console.log(`Found ${languageVoices.length} voices for ${language}:`, 
+        languageVoices.map((v: any) => `${v.name} (${v.language})`));
       
       // Try to find a male voice with broader detection for Android and iOS
       const maleVoice = languageVoices.find((v: any) => {
@@ -132,8 +155,10 @@ export const useTTS = (): UseTTSReturn => {
     textBufferRef.current += token;
 
     // Check for sentence endings or natural pauses
-    const sentenceEndings = /[.!?]\s*$/;
-    const commaEndings = /,\s*$/;
+    // Include both Western (.!?;:) and Chinese/CJK punctuation (。！？；：)
+    const sentenceEndings = /[.!?;:。！？；：]\s*$/;
+    // Include both Western (,) and Chinese/CJK comma (，)
+    const commaEndings = /[,，]\s*$/;
     
     // Speak when we hit a sentence ending
     if (sentenceEndings.test(textBufferRef.current)) {

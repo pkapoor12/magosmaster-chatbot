@@ -267,7 +267,11 @@ const App = () => {
     setInput('');
     setIsGenerating(true);
 
-    const prompt = `<|user|>\n${userText}<|end|>\n<|assistant|>\n`;
+    // Define how you want the model to behave
+    const systemInstruction = "You are a helpful magic assistant. Respond in 1-2 sentences (generally 10-15 words or less) promptingthe user with a follow up question.";
+
+    // Add the system block BEFORE the user block
+    const prompt = `<|system|>\n${systemInstruction}<|end|>\n<|user|>\n${userText}<|end|>\n<|assistant|>\n`;
 
     try {
       const botId = `bot-${Date.now()}`;

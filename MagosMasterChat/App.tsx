@@ -15,7 +15,6 @@ import {
 } from 'react-native';
 import RNFS from 'react-native-fs';
 import { initWhisper } from 'whisper.rn';
-import AudioRecord from 'react-native-audio-record';
 import { useTTS, TTSLanguage } from './hooks/useTTS';
 
 // Import llama.rn with error handling
@@ -39,8 +38,6 @@ type TokenData = { token: string };
 type LlamaContext = any;
 
 // --- Configuration ---
-// const MODEL_URL = 'https://huggingface.co/chatpdflocal/MobileLLM-GGUF/resolve/main/MobileLLM-1B-Q8_0.gguf?download=true';
-// const MODEL_FILENAME = 'MobileLLM-1B-Q8_0.gguf';
 const MODEL_URL = 'https://huggingface.co/pujeetk/phi-4-mini-magic-Q4_K_M/resolve/main/phi-4-mini-magic-Q4_K_M.gguf';
 const MODEL_FILENAME = 'phi-4-mini-magic-Q4_K_M.gguf';
 const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/${MODEL_FILENAME}`;
@@ -53,6 +50,15 @@ const LoadingScreen = ({ text }: { text: string }) => (
   <View style={styles.loadingContainer}>
     <ActivityIndicator size="large" color="#007aff" />
     <Text style={styles.loadingText}>{text}</Text>
+  </View>
+);
+
+const DownloadScreen = ({ progress }: { progress: number }) => (
+  <View style={styles.loadingContainer}>
+    <ActivityIndicator size="large" color="#007aff" />
+    <Text style={styles.loadingText}>Downloading Model...</Text>
+    <Text style={styles.loadingText}>{(progress * 100).toFixed(0)}%</Text>
+    <Text style={styles.downloadHintText}>This is a one-time download.</Text>
   </View>
 );
 
@@ -82,6 +88,7 @@ const MessageBubble = ({ message }: { message: Message }) => {
 // --- Main App ---
 const App = () => {
   const [appState, setAppState] = useState<AppState>('checking');
+  const [downloadProgress, setDownloadProgress] = useState(0);
   const [loadingText, setLoadingText] = useState('Initializing...');
   const [errorMessage, setErrorMessage] = useState('');
   
@@ -91,7 +98,10 @@ const App = () => {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  
+  // Ref to hold the Whisper stop function
+  const stopTranscriptionRef = useRef<(() => void) | null>(null);
   
   const flatListRef = useRef<FlatList<Message>>(null);
 
@@ -111,13 +121,6 @@ const App = () => {
   useEffect(() => {
     checkPermissions();
     setupModels();
-    AudioRecord.init({
-      sampleRate: 16000,
-      channels: 1,
-      bitsPerSample: 16,
-      audioSource: 6,
-      wavFile: 'voice_input.wav'
-    });
   }, []);
 
   const checkPermissions = async () => {
@@ -133,16 +136,30 @@ const App = () => {
   const setupModels = async () => {
     try {
       setAppState('checking');
+      
+      // Download Whisper
       if (!(await RNFS.exists(WHISPER_MODEL_PATH))) {
         setAppState('downloading');
         setLoadingText('Downloading Whisper...');
         await RNFS.downloadFile({ fromUrl: WHISPER_MODEL_URL, toFile: WHISPER_MODEL_PATH }).promise;
       }
+
+      // Download Llama
       if (!(await RNFS.exists(MODEL_PATH))) {
         setAppState('downloading');
-        setLoadingText('Downloading Chat Model...');
-        await RNFS.downloadFile({ fromUrl: MODEL_URL, toFile: MODEL_PATH, background: true }).promise;
+        setLoadingText('Downloading Phi-4 Mini...');
+        await RNFS.downloadFile({
+          fromUrl: MODEL_URL,
+          toFile: MODEL_PATH,
+          background: true,
+          discretionary: false,
+          progressDivider: 1,
+          progress: (res) => {
+            setDownloadProgress(res.bytesWritten / res.contentLength);
+          },
+        }).promise;
       }
+
       setAppState('loading_model');
     } catch (e: any) {
       setErrorMessage(e.message);
@@ -156,48 +173,88 @@ const App = () => {
 
   const loadAI = async () => {
     try {
-      setLoadingText('Loading AI Engines...');
+      setLoadingText('Loading Whisper...');
       const wContext = await initWhisper({ filePath: WHISPER_MODEL_PATH });
       setWhisperContext(wContext);
 
+      setLoadingText('Loading Llama...');
       const lContext = await initLlama({
         model: MODEL_PATH,
-        use_mlock: false,
-        n_ctx: 1024,
-        n_gpu_layers: 99,
+        use_mlock: true, 
+        n_ctx: 2048,
+        n_gpu_layers: 99, 
         n_threads: 4,
       });
       setLlamaContext(lContext);
       setAppState('ready');
     } catch (e: any) {
-      setErrorMessage(e.message);
+      setErrorMessage(`AI Init Failed: ${e.message}`);
       setAppState('error');
     }
   };
 
+  // 2. Realtime Transcription Logic
   const toggleListening = async () => {
-    if (isRecording) {
-      setIsRecording(false);
-      try {
-        const audioFile = await AudioRecord.stop();
-        if (whisperContext) {
-          const { result } = await whisperContext.transcribe(audioFile, { language: 'en' });
-          if (result) setInput(prev => (prev + " " + result).trim());
-        }
-      } catch (e) {}
+    if (isListening) {
+      // STOP
+      if (stopTranscriptionRef.current) {
+        await stopTranscriptionRef.current();
+        stopTranscriptionRef.current = null;
+      }
+      setIsListening(false);
     } else {
-      setIsRecording(true);
-      AudioRecord.start();
+      // START
+      if (!whisperContext) return;
+      
+      try {
+        stopSpeaking(); // Stop TTS if talking
+        setInput('');   // Clear previous text
+        setIsListening(true);
+
+        const { stop, subscribe } = await whisperContext.transcribeRealtime({
+          language: 'en',
+          // Optimize for speed:
+          max_len: 1, 
+          beam_size: 1, 
+          audio_ctx: 512, 
+        });
+
+        stopTranscriptionRef.current = stop;
+
+        subscribe((evt: any) => {
+          const { isCapturing, data, processTime } = evt;
+          
+          if (isCapturing) console.log('Whisper listening...');
+          
+          if (data) {
+            // FIX: Ensure it is a string. If it's an object, try to find the text.
+            const text = typeof data === 'string' 
+              ? data 
+              : (data.result || data.text || JSON.stringify(data)); // Handle object case
+            
+            // Only update if we have actual text
+            if (typeof text === 'string') {
+              setInput(text);
+            }
+          }
+        });
+
+      } catch (e) {
+        console.error('Realtime Transcription Error:', e);
+        setIsListening(false);
+      }
     }
   };
 
-  // 4. Handle Send & Stop
+  // 3. Handle Send
   const handleSend = async () => {
-    if (input.trim().length === 0 || !llamaContext) return;
+    if (input.trim().length === 0 || !llamaContext || isGenerating) return;
 
-    if (isRecording) {
-      setIsRecording(false);
-      await AudioRecord.stop();
+    // Stop listening if active
+    if (isListening && stopTranscriptionRef.current) {
+      await stopTranscriptionRef.current();
+      stopTranscriptionRef.current = null;
+      setIsListening(false);
     }
 
     stopSpeaking();
@@ -210,7 +267,11 @@ const App = () => {
     setInput('');
     setIsGenerating(true);
 
-    const prompt = `<|user|>\n${userText}<|end|>\n<|assistant|>\n`;
+    // Define how you want the model to behave
+    const systemInstruction = "You are a helpful magic assistant. Respond in 1-2 sentences (generally 10-15 words or less) promptingthe user with a follow up question.";
+
+    // Add the system block BEFORE the user block
+    const prompt = `<|system|>\n${systemInstruction}<|end|>\n<|user|>\n${userText}<|end|>\n<|assistant|>\n`;
 
     try {
       const botId = `bot-${Date.now()}`;
@@ -243,20 +304,13 @@ const App = () => {
 
   const handleStop = async () => {
     if (llamaContext) {
-      // 1. Stop Llama generation
       await llamaContext.stopCompletion();
-      // 2. Stop TTS speaking
       stopSpeaking();
       setIsGenerating(false);
     }
   };
 
-  if (appState !== 'ready') {
-    if (appState === 'error') return <ErrorScreen message={errorMessage} onRetry={setupModels} />;
-    return <LoadingScreen text={loadingText} />;
-  }
-
-  // Language Button Helper
+  // UI Helper for Language Buttons
   const LangBtn = ({ lang, label }: { lang: TTSLanguage, label: string }) => (
     <TouchableOpacity 
       style={[styles.langButton, currentLanguage === lang && styles.langButtonActive]} 
@@ -266,11 +320,16 @@ const App = () => {
     </TouchableOpacity>
   );
 
+  if (appState !== 'ready') {
+    if (appState === 'downloading') return <DownloadScreen progress={downloadProgress} />;
+    if (appState === 'error') return <ErrorScreen message={errorMessage} onRetry={setupModels} />;
+    return <LoadingScreen text={loadingText} />;
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{flex:1}}>
         
-        {/* Header */}
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Magos AI</Text>
           <TouchableOpacity onPress={toggleTTS} style={styles.iconButton}>
@@ -278,7 +337,6 @@ const App = () => {
           </TouchableOpacity>
         </View>
 
-        {/* Language Selector Row */}
         <View style={styles.langContainer}>
           <LangBtn lang="en-US" label="🇺🇸 EN" />
           <LangBtn lang="fr-FR" label="🇫🇷 FR" />
@@ -286,7 +344,6 @@ const App = () => {
           <LangBtn lang="zh-HK" label="🇭🇰 HK" />
         </View>
 
-        {/* Chat List */}
         <FlatList
           ref={flatListRef}
           data={messages}
@@ -297,34 +354,32 @@ const App = () => {
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
         />
 
-        {/* Input Area */}
         <View style={styles.inputContainer}>
           <TouchableOpacity 
-            style={[styles.micButton, isRecording && styles.micButtonActive]} 
+            style={[styles.micButton, isListening && styles.micButtonActive]} 
             onPress={toggleListening}
             disabled={isGenerating}
           >
-            <Icon name={isRecording ? "square" : "mic"} size={24} color={isRecording ? "#ff3b30" : "#333"} />
+            <Icon name={isListening ? "square" : "mic"} size={24} color={isListening ? "#ff3b30" : "#333"} />
           </TouchableOpacity>
 
           <TextInput
             style={styles.input}
             value={input}
             onChangeText={setInput}
-            placeholder={isRecording ? "Listening..." : "Ask anything..."}
+            placeholder={isListening ? "Listening..." : "Ask anything..."}
             placeholderTextColor="#999"
             editable={!isGenerating}
             multiline
           />
           
-          {/* TOGGLE: Send Button OR Stop Button */}
           {isGenerating ? (
             <TouchableOpacity style={styles.stopButton} onPress={handleStop}>
               <Icon name="square" size={20} color="#fff" />
             </TouchableOpacity>
           ) : (
             <TouchableOpacity 
-              style={[styles.sendButton, (!input.trim() && !isRecording) && styles.sendButtonDisabled]} 
+              style={[styles.sendButton, (!input.trim() && !isListening) && styles.sendButtonDisabled]} 
               onPress={handleSend}
               disabled={!input.trim()}
             >
@@ -344,15 +399,15 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#333' },
   iconButton: { padding: 8 },
   
-  // Language Styles
   langContainer: { flexDirection: 'row', justifyContent: 'center', paddingVertical: 8, borderBottomWidth: 1, borderColor: '#eee' },
   langButton: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15, marginHorizontal: 4, backgroundColor: '#f0f0f0', minWidth: 60 },
   langButtonActive: { backgroundColor: '#007aff' },
   langText: { fontSize: 12, fontWeight: '600', color: '#333', textAlign: 'center' },
   langTextActive: { color: '#fff' },
 
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff', padding: 20 },
   loadingText: { marginTop: 15, fontSize: 16, color: '#333' },
+  downloadHintText: { marginTop: 10, fontSize: 14, color: '#666', textAlign: 'center' },
   errorText: { color: 'red', textAlign: 'center', marginBottom: 20, paddingHorizontal: 20 },
   errorIcon: { fontSize: 50, marginBottom: 10 },
   retryButton: { backgroundColor: '#007aff', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 20 },
@@ -364,12 +419,14 @@ const styles = StyleSheet.create({
   messageRow: { flexDirection: 'row', marginVertical: 5 },
   userMessageRow: { justifyContent: 'flex-end' },
   botMessageRow: { justifyContent: 'flex-start' },
+  
   messageBubble: { 
     maxWidth: '80%', padding: 12, borderRadius: 15,
     borderWidth: 1, borderColor: 'transparent'
   },
   userMessageBubble: { backgroundColor: '#007aff', borderBottomRightRadius: 2 },
   botMessageBubble: { backgroundColor: '#e5e5ea', borderBottomLeftRadius: 2 },
+  
   userMessageText: { color: '#fff', fontSize: 16, marginBottom: 2 },
   botMessageText: { color: '#000', fontSize: 16, marginBottom: 2 },
 
@@ -377,8 +434,9 @@ const styles = StyleSheet.create({
   input: { 
     flex: 1, backgroundColor: '#f0f0f0', borderRadius: 20, paddingHorizontal: 15, 
     minHeight: 40, maxHeight: 100, marginHorizontal: 10, 
-    fontSize: 16, textAlignVertical: 'center', paddingVertical: 8 
+    fontSize: 16, textAlignVertical: 'center', paddingVertical: 8, includeFontPadding: false
   },
+  
   micButton: { justifyContent: 'center', alignItems: 'center', height: 40, width: 40 },
   micButtonActive: { backgroundColor: '#ffe0e0', borderRadius: 20 },
   

@@ -341,6 +341,7 @@ const App = () => {
           <LangBtn lang="en-US" label="🇺🇸 EN" />
           <LangBtn lang="fr-FR" label="🇫🇷 FR" />
           <LangBtn lang="zh-CN" label="🇨🇳 CN" />
+          <LangBtn lang="zh-TW" label="🇹🇼 TW" />
           <LangBtn lang="zh-HK" label="🇭🇰 HK" />
         </View>
 

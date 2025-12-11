@@ -316,7 +316,7 @@ const App = () => {
       style={[styles.langButton, currentLanguage === lang && styles.langButtonActive]} 
       onPress={() => setLanguage(lang)}
     >
-      <Text style={[styles.langText, currentLanguage === lang && styles.langTextActive]}>{label}</Text>
+      <Text numberOfLines={1} style={[styles.langText, currentLanguage === lang && styles.langTextActive]}>{label}</Text>
     </TouchableOpacity>
   );
 
@@ -342,6 +342,7 @@ const App = () => {
           <LangBtn lang="fr-FR" label="🇫🇷 FR" />
           <LangBtn lang="zh-CN" label="🇨🇳 CN" />
           <LangBtn lang="zh-TW" label="🇹🇼 TW" />
+          <LangBtn lang="zh-HK" label="🇭🇰 HK" />
         </View>
 
         <FlatList
@@ -400,9 +401,9 @@ const styles = StyleSheet.create({
   iconButton: { padding: 8 },
   
   langContainer: { flexDirection: 'row', justifyContent: 'center', paddingVertical: 8, borderBottomWidth: 1, borderColor: '#eee' },
-  langButton: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15, marginHorizontal: 4, backgroundColor: '#f0f0f0' },
+  langButton: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15, marginHorizontal: 4, backgroundColor: '#f0f0f0', minWidth: 60 },
   langButtonActive: { backgroundColor: '#007aff' },
-  langText: { fontSize: 12, fontWeight: '600', color: '#333' },
+  langText: { fontSize: 12, fontWeight: '600', color: '#333', textAlign: 'center' },
   langTextActive: { color: '#fff' },
 
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff', padding: 20 },

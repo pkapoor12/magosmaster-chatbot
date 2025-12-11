@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Tts from 'react-native-tts';
 
-export type TTSLanguage = 'en-US' | 'zh-CN' | 'zh-TW' | 'fr-FR';
+export type TTSLanguage = 'en-US' | 'zh-CN' | 'zh-TW' | 'zh-HK' | 'fr-FR';
 
 interface UseTTSReturn {
   isTTSEnabled: boolean;

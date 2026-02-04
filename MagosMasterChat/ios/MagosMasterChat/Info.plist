@@ -55,5 +55,11 @@
 	<string>We need access to the microphone for voice chat.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>We need speech recognition to convert your voice to text.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app needs microphone access to transcribe your speech into text</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Feather.ttf</string>
+	</array>
 </dict>
 </plist>

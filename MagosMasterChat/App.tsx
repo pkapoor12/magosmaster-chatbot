@@ -11,8 +11,10 @@ import {
   Platform,
   FlatList,
   ActivityIndicator,
+  PermissionsAndroid,
 } from 'react-native';
 import RNFS from 'react-native-fs';
+import { initWhisper } from 'whisper.rn';
 import { useTTS, TTSLanguage } from './hooks/useTTS';
 
 // Import llama.rn with error handling
@@ -41,6 +43,9 @@ const MODEL_FILENAME = 'MobileLLM-1B-Q8_0.gguf';
 // const MODEL_URL = 'https://huggingface.co/pujeetk/phi-4-mini-magic-Q4_K_M/resolve/main/phi-4-mini-magic-Q4_K_M.gguf';
 // const MODEL_FILENAME = 'phi-4-mini-magic-Q4_K_M.gguf';
 const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/${MODEL_FILENAME}`;
+
+const WHISPER_MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin';
+const WHISPER_MODEL_PATH = `${RNFS.DocumentDirectoryPath}/ggml-tiny.en.bin`;
 
 // --- UI Components ---
 const LoadingScreen = ({ text }: { text: string }) => (
@@ -90,10 +95,15 @@ const App = () => {
   const [errorMessage, setErrorMessage] = useState('');
   
   const [llamaContext, setLlamaContext] = useState<LlamaContext | null>(null);
+  const [whisperContext, setWhisperContext] = useState<any>(null);
   
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  
+  // Ref to hold the Whisper stop function
+  const stopTranscriptionRef = useRef<(() => void) | null>(null);
   
   const flatListRef = useRef<FlatList<Message>>(null);
 
@@ -109,14 +119,33 @@ const App = () => {
     resetBuffer 
   } = useTTS();
 
+  // 1. Initial Setup
   useEffect(() => {
+    checkPermissions();
     setupModels();
   }, []);
+
+  const checkPermissions = async () => {
+    if (Platform.OS === 'android') {
+      await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+        PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+      ]);
+    }
+  };
 
   const setupModels = async () => {
     try {
       setAppState('checking');
       
+      // Download Whisper
+      if (!(await RNFS.exists(WHISPER_MODEL_PATH))) {
+        setAppState('downloading');
+        setLoadingText('Downloading Whisper...');
+        await RNFS.downloadFile({ fromUrl: WHISPER_MODEL_URL, toFile: WHISPER_MODEL_PATH }).promise;
+      }
+
       // Download Llama
       if (!(await RNFS.exists(MODEL_PATH))) {
         setAppState('downloading');
@@ -146,6 +175,10 @@ const App = () => {
 
   const loadAI = async () => {
     try {
+      setLoadingText('Loading Whisper...');
+      const wContext = await initWhisper({ filePath: WHISPER_MODEL_PATH });
+      setWhisperContext(wContext);
+
       setLoadingText('Loading Llama...');
       const lContext = await initLlama({
         model: MODEL_PATH,
@@ -162,9 +195,69 @@ const App = () => {
     }
   };
 
-  // Handle Send
+  // 2. Realtime Transcription Logic
+  const toggleListening = async () => {
+    if (isListening) {
+      // STOP
+      if (stopTranscriptionRef.current) {
+        await stopTranscriptionRef.current();
+        stopTranscriptionRef.current = null;
+      }
+      setIsListening(false);
+    } else {
+      // START
+      if (!whisperContext) return;
+      
+      try {
+        stopSpeaking(); // Stop TTS if talking
+        setInput('');   // Clear previous text
+        setIsListening(true);
+
+        const { stop, subscribe } = await whisperContext.transcribeRealtime({
+          language: 'en',
+          // Optimize for speed:
+          max_len: 1, 
+          beam_size: 1, 
+          audio_ctx: 512, 
+        });
+
+        stopTranscriptionRef.current = stop;
+
+        subscribe((evt: any) => {
+          const { isCapturing, data, processTime } = evt;
+          
+          if (isCapturing) console.log('Whisper listening...');
+          
+          if (data) {
+            // FIX: Ensure it is a string. If it's an object, try to find the text.
+            const text = typeof data === 'string' 
+              ? data 
+              : (data.result || data.text || JSON.stringify(data)); // Handle object case
+            
+            // Only update if we have actual text
+            if (typeof text === 'string') {
+              setInput(text);
+            }
+          }
+        });
+
+      } catch (e) {
+        console.error('Realtime Transcription Error:', e);
+        setIsListening(false);
+      }
+    }
+  };
+
+  // 3. Handle Send
   const handleSend = async () => {
     if (input.trim().length === 0 || !llamaContext || isGenerating) return;
+
+    // Stop listening if active
+    if (isListening && stopTranscriptionRef.current) {
+      await stopTranscriptionRef.current();
+      stopTranscriptionRef.current = null;
+      setIsListening(false);
+    }
 
     stopSpeaking();
     resetBuffer();
@@ -176,7 +269,10 @@ const App = () => {
     setInput('');
     setIsGenerating(true);
 
-    const systemInstruction = "You are a helpful assistant. Respond in 1-2 sentences prompting the user with a follow up question.";
+    // Define how you want the model to behave
+    const systemInstruction = "You are a helpful magic assistant. Respond in 1-2 sentences (generally 10-15 words or less) promptingthe user with a follow up question.";
+
+    // Add the system block BEFORE the user block
     const prompt = `<|system|>\n${systemInstruction}<|end|>\n<|user|>\n${userText}<|end|>\n<|assistant|>\n`;
 
     try {
@@ -216,12 +312,13 @@ const App = () => {
     }
   };
 
+  // UI Helper for Language Buttons
   const LangBtn = ({ lang, label }: { lang: TTSLanguage, label: string }) => (
     <TouchableOpacity 
       style={[styles.langButton, currentLanguage === lang && styles.langButtonActive]} 
       onPress={() => setLanguage(lang)}
     >
-      <Text style={[styles.langText, currentLanguage === lang && styles.langTextActive]}>{label}</Text>
+      <Text numberOfLines={1} style={[styles.langText, currentLanguage === lang && styles.langTextActive]}>{label}</Text>
     </TouchableOpacity>
   );
 
@@ -247,6 +344,7 @@ const App = () => {
           <LangBtn lang="fr-FR" label="🇫🇷 FR" />
           <LangBtn lang="zh-CN" label="🇨🇳 CN" />
           <LangBtn lang="zh-TW" label="🇹🇼 TW" />
+          <LangBtn lang="zh-HK" label="🇭🇰 HK" />
         </View>
 
         <FlatList
@@ -260,11 +358,19 @@ const App = () => {
         />
 
         <View style={styles.inputContainer}>
+          <TouchableOpacity 
+            style={[styles.micButton, isListening && styles.micButtonActive]} 
+            onPress={toggleListening}
+            disabled={isGenerating}
+          >
+            <Icon name={isListening ? "square" : "mic"} size={24} color={isListening ? "#ff3b30" : "#333"} />
+          </TouchableOpacity>
+
           <TextInput
             style={styles.input}
             value={input}
             onChangeText={setInput}
-            placeholder="Ask anything..."
+            placeholder={isListening ? "Listening..." : "Ask anything..."}
             placeholderTextColor="#999"
             editable={!isGenerating}
             multiline
@@ -276,7 +382,7 @@ const App = () => {
             </TouchableOpacity>
           ) : (
             <TouchableOpacity 
-              style={[styles.sendButton, !input.trim() && styles.sendButtonDisabled]} 
+              style={[styles.sendButton, (!input.trim() && !isListening) && styles.sendButtonDisabled]} 
               onPress={handleSend}
               disabled={!input.trim()}
             >
@@ -297,9 +403,9 @@ const styles = StyleSheet.create({
   iconButton: { padding: 8 },
   
   langContainer: { flexDirection: 'row', justifyContent: 'center', paddingVertical: 8, borderBottomWidth: 1, borderColor: '#eee' },
-  langButton: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15, marginHorizontal: 4, backgroundColor: '#f0f0f0' },
+  langButton: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15, marginHorizontal: 4, backgroundColor: '#f0f0f0', minWidth: 60 },
   langButtonActive: { backgroundColor: '#007aff' },
-  langText: { fontSize: 12, fontWeight: '600', color: '#333' },
+  langText: { fontSize: 12, fontWeight: '600', color: '#333', textAlign: 'center' },
   langTextActive: { color: '#fff' },
 
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff', padding: 20 },
@@ -333,6 +439,9 @@ const styles = StyleSheet.create({
     minHeight: 40, maxHeight: 100, marginHorizontal: 10, 
     fontSize: 16, textAlignVertical: 'center', paddingVertical: 8, includeFontPadding: false
   },
+  
+  micButton: { justifyContent: 'center', alignItems: 'center', height: 40, width: 40 },
+  micButtonActive: { backgroundColor: '#ffe0e0', borderRadius: 20 },
   
   sendButton: { justifyContent: 'center', alignItems: 'center', backgroundColor: '#007aff', borderRadius: 20, height: 40, width: 40 },
   sendButtonDisabled: { backgroundColor: '#c7e0ff' },

@@ -40,12 +40,12 @@ type TokenData = { token: string };
 type LlamaContext = any;
 
 // --- Configuration ---
-const MODEL_URL = 'https://huggingface.co/chatpdflocal/MobileLLM-GGUF/resolve/main/MobileLLM-1B-Q8_0.gguf?download=true';
-const MODEL_FILENAME = 'MobileLLM-1B-Q8_0.gguf';
+const MODEL_URL = 'https://huggingface.co/pujeetk/phi-4-mini-magic-Q4_K_M/resolve/main/phi-4-mini-magic-Q4_K_M.gguf';
+const MODEL_FILENAME = 'phi-4-mini-magic-Q4_K_M.gguf';
 const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/${MODEL_FILENAME}`;
 
-const WHISPER_MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin';
-const WHISPER_MODEL_PATH = `${RNFS.DocumentDirectoryPath}/ggml-small.en.bin`;
+const WHISPER_MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin';
+const WHISPER_MODEL_PATH = `${RNFS.DocumentDirectoryPath}/ggml-tiny.bin`;
 
 // Estimated sizes for progress bar fallback
 const EST_WHISPER_SIZE = 466 * 1024 * 1024;
@@ -121,7 +121,7 @@ const App = () => {
   
   // Audio Queue Refs
   const ttsQueue = useRef<string[]>([]);
-  const [isTtsBusy, setIsTtsBusy] = useState(false);
+  const [queueLength, setQueueLength] = useState(0);
 
   const { 
     isTTSEnabled, 
@@ -140,26 +140,29 @@ const App = () => {
     setupModels();
   }, []);
 
-  // 2. Audio Queue Worker
+  // 2. Audio Queue Worker - simplified, TTS hook handles its own queue
   useEffect(() => {
-    const processQueue = async () => {
-      if (isTtsBusy || ttsQueue.current.length === 0 || !isTTSEnabled) return;
+    console.log('🎵 TTS Effect triggered - queue length:', queueLength, 'TTS enabled:', isTTSEnabled);
+    
+    if (!isTTSEnabled || queueLength === 0) {
+      console.log('⏭️ Effect early return - enabled:', isTTSEnabled, 'queue length:', queueLength);
+      return;
+    }
 
-      setIsTtsBusy(true);
-      const nextSentence = ttsQueue.current.shift();
-      
-      if (nextSentence) {
-        speakToken(nextSentence);
-        // Manual delay: approx 70ms per char + 400ms buffer
-        const delay = nextSentence.length * 70 + 400; 
-        setTimeout(() => {
-          setIsTtsBusy(false);
-        }, delay);
+    console.log('📢 Processing queue, current size:', ttsQueue.current.length);
+    
+    // Process all queued sentences
+    while (ttsQueue.current.length > 0) {
+      const sentence = ttsQueue.current.shift();
+      if (sentence) {
+        console.log('📢 TTS: Calling speakToken with:', sentence);
+        speakToken(sentence);
       }
-    };
-
-    processQueue();
-  }, [isTtsBusy, messages, isTTSEnabled]);
+    }
+    
+    // Reset queue length after processing
+    setQueueLength(0);
+  }, [queueLength, isTTSEnabled, speakToken]);
 
   const checkPermissions = async () => {
     if (Platform.OS === 'android') {
@@ -175,12 +178,10 @@ const App = () => {
     try {
       setAppState('checking');
 
-      // 1. Whisper Download
       if (!(await RNFS.exists(WHISPER_MODEL_PATH))) {
         setAppState('downloading');
         setLoadingText('Downloading Whisper Engine...');
         setDownloadProgress(0);
-        console.log('Starting Whisper download from:', WHISPER_MODEL_URL);
 
         await new Promise<void>((resolve, reject) => {
           RNFS.downloadFile({
@@ -190,16 +191,11 @@ const App = () => {
             progress: (res) => {
               if (res.contentLength > 0) {
                 const percent = res.bytesWritten / res.contentLength;
-                console.log(`Whisper: ${res.bytesWritten}/${res.contentLength} = ${Math.round(percent * 100)}%`);
                 setDownloadProgress(percent);
               }
             },
-            begin: () => {
-              console.log('Whisper download started');
-            },
-            resumable: () => {
-              console.log('Whisper download resumable');
-            },
+            begin: () => console.log('Whisper download started'),
+            resumable: () => console.log('Whisper download resumable'),
           }).promise.then((result) => {
             console.log('Whisper download completed:', result);
             setDownloadProgress(1);
@@ -208,12 +204,10 @@ const App = () => {
         });
       }
 
-      // 2. Llama Download
       if (!(await RNFS.exists(MODEL_PATH))) {
         setAppState('downloading');
-        setLoadingText('Downloading MobileLLM...');
+        setLoadingText('Downloading Phi...');
         setDownloadProgress(0);
-        console.log('Starting Llama download from:', MODEL_URL);
 
         await new Promise<void>((resolve, reject) => {
           RNFS.downloadFile({
@@ -223,18 +217,13 @@ const App = () => {
             progress: (res) => {
               if (res.contentLength > 0) {
                 const percent = res.bytesWritten / res.contentLength;
-                console.log(`Llama: ${res.bytesWritten}/${res.contentLength} = ${Math.round(percent * 100)}%`);
                 setDownloadProgress(percent);
               }
             },
-            begin: () => {
-              console.log('Llama download started');
-            },
-            resumable: () => {
-              console.log('Llama download resumable');
-            },
+            begin: () => console.log('Phi download started'),
+            resumable: () => console.log('Phi download resumable'),
           }).promise.then((result) => {
-            console.log('Llama download completed:', result);
+            console.log('Phi download completed:', result);
             setDownloadProgress(1);
             resolve();
           }).catch(reject);
@@ -249,7 +238,6 @@ const App = () => {
     }
   };
 
-  // Add delay before loading models
   const startModelLoading = async () => {
     console.log('Waiting before model load...');
     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -259,7 +247,7 @@ const App = () => {
   const handleClearCache = () => {
     Alert.alert(
       "Reset AI Models?",
-      "This will delete your downloaded models and re-download them. Use this to test the progress bar.",
+      "This will delete your downloaded models and re-download them.",
       [
         { text: "Cancel", style: "cancel" },
         { 
@@ -287,47 +275,38 @@ const App = () => {
   const loadAI = async () => {
     try {
       setLoadingText('Loading Whisper...');
-      console.log('Initializing Whisper from:', WHISPER_MODEL_PATH);
-      
-      try {
-        const wContext = await initWhisper({ filePath: WHISPER_MODEL_PATH });
-        console.log('Whisper loaded successfully');
-        setWhisperContext(wContext);
-      } catch (whisperError: any) {
-        console.error('Whisper init failed:', whisperError);
-        console.error('Whisper error message:', whisperError.message);
-        throw new Error(`Whisper initialization failed: ${whisperError.message}`);
-      }
+      const wContext = await initWhisper({ filePath: WHISPER_MODEL_PATH });
+      setWhisperContext(wContext);
 
-      setLoadingText('Loading Llama...');
-      console.log('Initializing Llama from:', MODEL_PATH);
-      
-      try {
-        const lContext = await Promise.race([
-          initLlama({
-            model: MODEL_PATH,
-            use_mlock: false, 
-            n_ctx: 512,
-            n_gpu_layers: 0, 
-            n_threads: 2,
-          }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Llama init timeout')), 30000))
-        ]);
-        console.log('Llama loaded successfully');
-        setLlamaContext(lContext);
-      } catch (llamaError: any) {
-        console.error('Llama init failed:', llamaError);
-        console.error('Llama error message:', llamaError.message);
-        throw new Error(`Llama initialization failed: ${llamaError.message}`);
-      }
-      
+      setLoadingText('Loading Phi...');
+      const lContext = await Promise.race([
+        initLlama({
+          model: MODEL_PATH,
+          use_mlock: false, 
+          n_ctx: 512,
+          n_gpu_layers: 99, 
+          n_threads: 2,
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Llama init timeout')), 30000))
+      ]);
+      setLlamaContext(lContext);
       setAppState('ready');
     } catch (e: any) {
       console.error('AI Init Error:', e);
-      console.error('Error stack:', e.stack);
       setErrorMessage(`AI Init Failed: ${e.message}`);
       setAppState('error');
     }
+  };
+
+  // Map TTSLanguage to Whisper language codes
+  const getWhisperLanguage = (ttsLang: TTSLanguage): string => {
+    const langMap: Record<TTSLanguage, string> = {
+      'en-US': 'en',
+      'fr-FR': 'fr',
+      'zh-CN': 'zh',
+      'es-ES': 'es',
+    };
+    return langMap[ttsLang] || 'en';
   };
 
   const toggleListening = async () => {
@@ -344,8 +323,11 @@ const App = () => {
         setInput('');
         setIsListening(true);
 
+        const whisperLanguage = getWhisperLanguage(currentLanguage);
+        console.log('🎤 Starting transcription with language:', whisperLanguage, '(from:', currentLanguage + ')');
+
         const { stop, subscribe } = await whisperContext.transcribeRealtime({
-          language: 'en',
+          language: whisperLanguage,
           max_len: 1, 
           beam_size: 1, 
           audio_ctx: 512, 
@@ -359,6 +341,7 @@ const App = () => {
           }
         });
       } catch (e) {
+        console.error('Transcription error:', e);
         setIsListening(false);
       }
     }
@@ -376,7 +359,7 @@ const App = () => {
     stopSpeaking();
     resetBuffer();
     ttsQueue.current = [];
-    setIsTtsBusy(false);
+    setQueueLength(0);
 
     const userText = input.trim();
     setMessages(prev => [...prev, { id: `u-${Date.now()}`, text: userText, sender: 'user' }]);
@@ -386,12 +369,11 @@ const App = () => {
     const botId = `b-${Date.now()}`;
     setMessages(prev => [...prev, { id: botId, text: '', sender: 'bot' }]);
 
-    // Accumulate all text locally, update state less frequently
     let accumulatedText = '';
     let sentenceBuffer = '';
 
     try {
-      const systemPrompt = "You are a helpful magic assistant. Respond funly in 1-2 sentences.";
+      const systemPrompt = "You are a helpful magic assistant. Respond funly in 1-2 sentences. Always end with punctuation.";
       const prompt = `System: ${systemPrompt}\n\nUser: ${userText}\n\nAssistant: `;
 
       await llamaContext.completion(
@@ -404,16 +386,13 @@ const App = () => {
           const token = data.token || '';
           if (!token) return;
           
-          // Accumulate locally
           accumulatedText += token;
           sentenceBuffer += token;
 
-          // Update UI with accumulated text
           setMessages(prev => {
             const idx = prev.findIndex(m => m.id === botId);
             if (idx !== -1) {
               const current = prev[idx];
-              // Only update if text actually changed
               if (current.text !== accumulatedText) {
                 return [
                   ...prev.slice(0, idx),
@@ -425,21 +404,22 @@ const App = () => {
             return prev;
           });
 
-          // Check for sentence completion
-          if (/[.!?]/.test(token)) {
+          if (/[.!?。！？]/.test(token)) {
             const completed = sentenceBuffer.trim();
             if (completed.length > 0 && !completed.match(/System:|User:|Assistant:/)) {
+              console.log('📝 Queuing for TTS:', completed);
               ttsQueue.current.push(completed);
+              setQueueLength(prev => prev + 1);
             }
             sentenceBuffer = ""; 
           }
         }
       );
 
-      // Handle any remaining text
       const remaining = sentenceBuffer.trim();
       if (remaining.length > 0 && !remaining.includes('<|')) {
         ttsQueue.current.push(remaining);
+        setQueueLength(prev => prev + 1);
       }
       
       finishSpeaking();
@@ -456,7 +436,6 @@ const App = () => {
       ttsQueue.current = [];
       stopSpeaking();
       setIsGenerating(false);
-      setIsTtsBusy(false);
     }
   };
 

@@ -65,7 +65,7 @@ const DownloadScreen = ({ progress, text }: { progress: number, text: string }) 
     <Text style={styles.loadingText}>{text}</Text> 
     <Text style={styles.loadingText}>{Math.round(progress * 100)}%</Text>
     <View style={styles.progressBarContainer}>
-      <View style={[styles.progressBarFill, { width: `${progress * 100}%` }]} />
+      <View style={[styles.progressBarFill, { width: `${Math.min(progress * 100, 100)}%` }]} />
     </View>
   </View>
 );
@@ -180,16 +180,32 @@ const App = () => {
         setAppState('downloading');
         setLoadingText('Downloading Whisper Engine...');
         setDownloadProgress(0);
+        console.log('Starting Whisper download from:', WHISPER_MODEL_URL);
 
-        await RNFS.downloadFile({
-          fromUrl: WHISPER_MODEL_URL,
-          toFile: WHISPER_MODEL_PATH,
-          progressDivider: 1,
-          progress: (res) => {
-            const total = res.contentLength > 0 ? res.contentLength : EST_WHISPER_SIZE;
-            setDownloadProgress(res.bytesWritten / total);
-          },
-        }).promise;
+        await new Promise<void>((resolve, reject) => {
+          RNFS.downloadFile({
+            fromUrl: WHISPER_MODEL_URL,
+            toFile: WHISPER_MODEL_PATH,
+            progressInterval: 250,
+            progress: (res) => {
+              if (res.contentLength > 0) {
+                const percent = res.bytesWritten / res.contentLength;
+                console.log(`Whisper: ${res.bytesWritten}/${res.contentLength} = ${Math.round(percent * 100)}%`);
+                setDownloadProgress(percent);
+              }
+            },
+            begin: () => {
+              console.log('Whisper download started');
+            },
+            resumable: () => {
+              console.log('Whisper download resumable');
+            },
+          }).promise.then((result) => {
+            console.log('Whisper download completed:', result);
+            setDownloadProgress(1);
+            resolve();
+          }).catch(reject);
+        });
       }
 
       // 2. Llama Download
@@ -197,23 +213,47 @@ const App = () => {
         setAppState('downloading');
         setLoadingText('Downloading MobileLLM...');
         setDownloadProgress(0);
+        console.log('Starting Llama download from:', MODEL_URL);
 
-        await RNFS.downloadFile({
-          fromUrl: MODEL_URL,
-          toFile: MODEL_PATH,
-          progressDivider: 1,
-          progress: (res) => {
-            const total = res.contentLength > 0 ? res.contentLength : EST_LLAMA_SIZE;
-            setDownloadProgress(res.bytesWritten / total);
-          },
-        }).promise;
+        await new Promise<void>((resolve, reject) => {
+          RNFS.downloadFile({
+            fromUrl: MODEL_URL,
+            toFile: MODEL_PATH,
+            progressInterval: 250,
+            progress: (res) => {
+              if (res.contentLength > 0) {
+                const percent = res.bytesWritten / res.contentLength;
+                console.log(`Llama: ${res.bytesWritten}/${res.contentLength} = ${Math.round(percent * 100)}%`);
+                setDownloadProgress(percent);
+              }
+            },
+            begin: () => {
+              console.log('Llama download started');
+            },
+            resumable: () => {
+              console.log('Llama download resumable');
+            },
+          }).promise.then((result) => {
+            console.log('Llama download completed:', result);
+            setDownloadProgress(1);
+            resolve();
+          }).catch(reject);
+        });
       }
 
       setAppState('loading_model');
     } catch (e: any) {
+      console.error('Setup error:', e);
       setErrorMessage(e.message);
       setAppState('error');
     }
+  };
+
+  // Add delay before loading models
+  const startModelLoading = async () => {
+    console.log('Waiting before model load...');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    await loadAI();
   };
 
   const handleClearCache = () => {
@@ -241,26 +281,50 @@ const App = () => {
   };
 
   useEffect(() => {
-    if (appState === 'loading_model') loadAI();
+    if (appState === 'loading_model') startModelLoading();
   }, [appState]);
 
   const loadAI = async () => {
     try {
       setLoadingText('Loading Whisper...');
-      const wContext = await initWhisper({ filePath: WHISPER_MODEL_PATH });
-      setWhisperContext(wContext);
+      console.log('Initializing Whisper from:', WHISPER_MODEL_PATH);
+      
+      try {
+        const wContext = await initWhisper({ filePath: WHISPER_MODEL_PATH });
+        console.log('Whisper loaded successfully');
+        setWhisperContext(wContext);
+      } catch (whisperError: any) {
+        console.error('Whisper init failed:', whisperError);
+        console.error('Whisper error message:', whisperError.message);
+        throw new Error(`Whisper initialization failed: ${whisperError.message}`);
+      }
 
       setLoadingText('Loading Llama...');
-      const lContext = await initLlama({
-        model: MODEL_PATH,
-        use_mlock: true, 
-        n_ctx: 2048,
-        n_gpu_layers: 99, 
-        n_threads: 4,
-      });
-      setLlamaContext(lContext);
+      console.log('Initializing Llama from:', MODEL_PATH);
+      
+      try {
+        const lContext = await Promise.race([
+          initLlama({
+            model: MODEL_PATH,
+            use_mlock: false, 
+            n_ctx: 512,
+            n_gpu_layers: 0, 
+            n_threads: 2,
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Llama init timeout')), 30000))
+        ]);
+        console.log('Llama loaded successfully');
+        setLlamaContext(lContext);
+      } catch (llamaError: any) {
+        console.error('Llama init failed:', llamaError);
+        console.error('Llama error message:', llamaError.message);
+        throw new Error(`Llama initialization failed: ${llamaError.message}`);
+      }
+      
       setAppState('ready');
     } catch (e: any) {
+      console.error('AI Init Error:', e);
+      console.error('Error stack:', e.stack);
       setErrorMessage(`AI Init Failed: ${e.message}`);
       setAppState('error');
     }

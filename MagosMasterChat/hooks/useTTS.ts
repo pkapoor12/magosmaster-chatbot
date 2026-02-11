@@ -175,8 +175,8 @@ export const useTTS = (): UseTTSReturn => {
     textBufferRef.current += token;
     console.log('📝 Buffer now:', textBufferRef.current);
 
-    // Check for sentence endings (. ? ! : or newline)
-    const sentenceEndings = /[.?!:\n]\s*$/;
+   // Check for sentence endings (. ? ! : or newline) including Chinese punctuation (。？！：)
+    const sentenceEndings = /[.?!:\n。？！：]\s*$/;
     
     if (sentenceEndings.test(textBufferRef.current)) {
       const textToSpeak = textBufferRef.current.trim();

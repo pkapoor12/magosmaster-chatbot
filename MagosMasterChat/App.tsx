@@ -44,8 +44,8 @@ const MODEL_URL = 'https://huggingface.co/pujeetk/phi-4-mini-magic-Q4_K_M/resolv
 const MODEL_FILENAME = 'phi-4-mini-magic-Q4_K_M.gguf';
 const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/${MODEL_FILENAME}`;
 
-const WHISPER_MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin';
-const WHISPER_MODEL_PATH = `${RNFS.DocumentDirectoryPath}/ggml-small.bin`;
+const WHISPER_MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin';
+const WHISPER_MODEL_PATH = `${RNFS.DocumentDirectoryPath}/ggml-tiny.bin`;
 
 // Estimated sizes for progress bar fallback
 const EST_WHISPER_SIZE = 466 * 1024 * 1024;
@@ -298,6 +298,17 @@ const App = () => {
     }
   };
 
+  // Map TTSLanguage to Whisper language codes
+  const getWhisperLanguage = (ttsLang: TTSLanguage): string => {
+    const langMap: Record<TTSLanguage, string> = {
+      'en-US': 'en',
+      'fr-FR': 'fr',
+      'zh-CN': 'zh',
+      'es-ES': 'es',
+    };
+    return langMap[ttsLang] || 'en';
+  };
+
   const toggleListening = async () => {
     if (isListening) {
       if (stopTranscriptionRef.current) {
@@ -312,8 +323,11 @@ const App = () => {
         setInput('');
         setIsListening(true);
 
+        const whisperLanguage = getWhisperLanguage(currentLanguage);
+        console.log('🎤 Starting transcription with language:', whisperLanguage, '(from:', currentLanguage + ')');
+
         const { stop, subscribe } = await whisperContext.transcribeRealtime({
-          language: 'en',
+          language: whisperLanguage,
           max_len: 1, 
           beam_size: 1, 
           audio_ctx: 512, 
@@ -327,6 +341,7 @@ const App = () => {
           }
         });
       } catch (e) {
+        console.error('Transcription error:', e);
         setIsListening(false);
       }
     }
@@ -389,7 +404,7 @@ const App = () => {
             return prev;
           });
 
-          if (/[.!?]/.test(token)) {
+          if (/[.!?。！？]/.test(token)) {
             const completed = sentenceBuffer.trim();
             if (completed.length > 0 && !completed.match(/System:|User:|Assistant:/)) {
               console.log('📝 Queuing for TTS:', completed);

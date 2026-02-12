@@ -304,6 +304,7 @@ const App = () => {
       'en-US': 'en',
       'fr-FR': 'fr',
       'zh-CN': 'zh',
+      'zh-HK': 'zh',
       'es-ES': 'es',
     };
     return langMap[ttsLang] || 'en';
@@ -373,7 +374,7 @@ const App = () => {
     let sentenceBuffer = '';
 
     try {
-      const systemPrompt = "You are a helpful magic assistant. Respond funly in 1-2 sentences. Always end with punctuation.";
+      const systemPrompt = "You are a helpful magic assistant. Respond in 1-2 sentences. Always end with punctuation, and prompt the user with a follow-up question.";
       const prompt = `System: ${systemPrompt}\n\nUser: ${userText}\n\nAssistant: `;
 
       await llamaContext.completion(
@@ -473,8 +474,9 @@ const App = () => {
 
         <View style={styles.langContainer}>
           <LangBtn lang="en-US" label="🇺🇸 EN" />
-          <LangBtn lang="fr-FR" label="🇫🇷 FR" />
+          <LangBtn lang="zh-HK" label="🇭🇰 HK" />
           <LangBtn lang="zh-CN" label="🇨🇳 CN" />
+          <LangBtn lang="fr-FR" label="🇫🇷 FR" />
           <LangBtn lang="es-ES" label="🇪🇸 ES" />
         </View>
 

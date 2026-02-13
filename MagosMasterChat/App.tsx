@@ -44,8 +44,8 @@ const MODEL_URL = 'https://huggingface.co/pujeetk/phi-4-mini-magic-Q4_K_M/resolv
 const MODEL_FILENAME = 'phi-4-mini-magic-Q4_K_M.gguf';
 const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/${MODEL_FILENAME}`;
 
-const WHISPER_MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin';
-const WHISPER_MODEL_PATH = `${RNFS.DocumentDirectoryPath}/ggml-tiny.bin`;
+const WHISPER_MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin';
+const WHISPER_MODEL_PATH = `${RNFS.DocumentDirectoryPath}/ggml-small.bin`;
 
 // Estimated sizes for progress bar fallback
 const EST_WHISPER_SIZE = 466 * 1024 * 1024;
@@ -142,15 +142,6 @@ const App = () => {
 
   // 2. Audio Queue Worker - simplified, TTS hook handles its own queue
   useEffect(() => {
-    console.log('🎵 TTS Effect triggered - queue length:', queueLength, 'TTS enabled:', isTTSEnabled);
-    
-    if (!isTTSEnabled || queueLength === 0) {
-      console.log('⏭️ Effect early return - enabled:', isTTSEnabled, 'queue length:', queueLength);
-      return;
-    }
-
-    console.log('📢 Processing queue, current size:', ttsQueue.current.length);
-    
     // Process all queued sentences
     while (ttsQueue.current.length > 0) {
       const sentence = ttsQueue.current.shift();
@@ -299,15 +290,15 @@ const App = () => {
   };
 
   // Map TTSLanguage to Whisper language codes
-  const getWhisperLanguage = (ttsLang: TTSLanguage): string => {
-    const langMap: Record<TTSLanguage, string> = {
-      'en-US': 'en',
-      'fr-FR': 'fr',
-      'zh-CN': 'zh',
-      'zh-HK': 'zh',
-      'es-ES': 'es',
+  const getWhisperConfig = (ttsLang: TTSLanguage) => {
+    const configs: Record<TTSLanguage, { lang: string; prompt?: string }> = {
+      'en-US': { lang: 'en' },
+      'fr-FR': { lang: 'fr' },
+      'zh-CN': { lang: 'zh' }, // Defaults to Mandarin
+      'zh-HK': { lang: 'zh', prompt: "呢度係廣東話對話，會用到『咗』、『唔』、『係』、『點樣』。" }, // Nudge for Cantonese
+      'es-ES': { lang: 'es' },
     };
-    return langMap[ttsLang] || 'en';
+    return configs[ttsLang] || { lang: 'en' };
   };
 
   const toggleListening = async () => {
@@ -324,14 +315,17 @@ const App = () => {
         setInput('');
         setIsListening(true);
 
-        const whisperLanguage = getWhisperLanguage(currentLanguage);
-        console.log('🎤 Starting transcription with language:', whisperLanguage, '(from:', currentLanguage + ')');
+        const whisperConfig = getWhisperConfig(currentLanguage);
+        console.log('🎤 Starting transcription with language:', whisperConfig.lang, '(from:', currentLanguage + ')');
 
         const { stop, subscribe } = await whisperContext.transcribeRealtime({
-          language: whisperLanguage,
-          max_len: 1, 
-          beam_size: 1, 
+          language: whisperConfig.lang,
+          prompt: whisperConfig.prompt,
+          // Optimization changes below:
+          max_len: 60,       // Increased from 1. Helps Whisper see more context to avoid loops.
+          beam_size: 2,      // Increased from 1. Allows the model to consider a second "best guess."
           audio_ctx: 512, 
+          suppress_non_speech_tokens: true, // Prevents background noise from being turned into characters.
         });
 
         stopTranscriptionRef.current = stop;
@@ -374,10 +368,29 @@ const App = () => {
     let sentenceBuffer = '';
 
     try {
-      const systemPrompt = "You are a helpful magic assistant. Respond in 1-2 sentences. Always end with punctuation, and prompt the user with a follow-up question.";
+      const getSystemPrompt = (ttsLang: TTSLanguage): string => {
+        const base = "You are a helpful magic assistant. Respond in 1-2 sentences usually except when you need to include more detail. Always end with punctuation, and try to prompt the user with a follow-up question.";
+        
+        switch (ttsLang) {
+          case 'zh-HK':
+            return `${base} Please respond in Cantonese using Traditional Chinese characters (e.g., use '唔係' instead of '不是').`;
+          case 'zh-CN':
+            return `${base} Please respond in Mandarin using Simplified Chinese characters.`;
+          case 'fr-FR':
+            return `${base} Please respond in French.`;
+          case 'es-ES':
+            return `${base} Please respond in Spanish.`;
+          default:
+            return `${base} Please respond in English.`;
+        }
+      };
+
+      const systemPrompt = getSystemPrompt(currentLanguage);
+  
       const prompt = `System: ${systemPrompt}\n\nUser: ${userText}\n\nAssistant: `;
 
       await llamaContext.completion(
+        
         {
           prompt,
           n_predict: 256,

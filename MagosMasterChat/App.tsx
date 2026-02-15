@@ -273,6 +273,10 @@ const App = () => {
       const lContext = await Promise.race([
         initLlama({
           model: MODEL_PATH,
+          temperature: 0.7,
+          top_p: 0.85,
+          repeat_penalty: 1.2,
+          verbose: false,
           use_mlock: false, 
           n_ctx: 512,
           n_gpu_layers: 99, 

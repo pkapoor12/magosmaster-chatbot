@@ -373,11 +373,11 @@ const App = () => {
 
     try {
       const getSystemPrompt = (ttsLang: TTSLanguage): string => {
-        const base = "You are a helpful magic assistant. Respond in 1-2 sentences usually except when you need to include more detail. Always end with punctuation, and try to prompt the user with a follow-up question.";
+        const base = "You are MagosMaster, a fun and enthusiastic magic teacher for learners of all ages. Teach magic tricks step-by-step in a clear, encouraging, and exciting way. Always respond in the same language the user writes in. Keep every response to 3-4 sentences maximum - be concise, clear, and end with either a magic fun fact, a tip to practice, or a prompt to try the next step.";
         
         switch (ttsLang) {
           case 'zh-HK':
-            return `${base} Please respond in Cantonese using Traditional Chinese characters (e.g., use '唔係' instead of '不是').`;
+            return `${base} "呢度係廣東話對話，會用到『咗』、『唔』、『係』、『點樣』。`;
           case 'zh-CN':
             return `${base} Please respond in Mandarin using Simplified Chinese characters.`;
           case 'fr-FR':

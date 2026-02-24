@@ -373,13 +373,13 @@ const App = () => {
 
     try {
       const getSystemPrompt = (ttsLang: TTSLanguage): string => {
-        const base = "You are a helpful magic assistant. Respond in 1-2 sentences usually except when you need to include more detail. Always end with punctuation, and try to prompt the user with a follow-up question.";
+        const base = "You are MagosMaster, a fun and enthusiastic magic teacher for learners of all ages. Teach magic tricks step-by-step in a clear, encouraging, and exciting way. Always respond in the same language the user writes in. Keep every response to 3-4 sentences maximum - be concise, clear, and end with either a magic fun fact, a tip to practice, or a prompt to try the next step.";
         
         switch (ttsLang) {
           case 'zh-HK':
-            return `${base} Please respond in Cantonese using Traditional Chinese characters (e.g., use '唔係' instead of '不是').`;
+            return `你係 MagosMaster ，一個適合所有年齡嘅學習者嘅有趣同熱情嘅魔法老師。以清晰、鼓勵同令人刺激嘅方式逐步教魔術。每個回應最多只係3-4句 - 要簡潔、清晰，然後用一個神奇嘅有趣事實、一個練習嘅提示，或者一個試下下一步嘅提示嚟結束。呢度係廣東話對話，會用到『咗』、『唔』、『係』、『點樣』。`;
           case 'zh-CN':
-            return `${base} Please respond in Mandarin using Simplified Chinese characters.`;
+            return `$你是MagosMaster，一位风趣热情、面向所有年龄段学习者的魔术老师。请以清晰、鼓励和引人入胜的方式，一步一步地教授魔术技巧。每次回复请控制在3-4句话以内——务必简洁明了，并以一个有趣的魔术小知识、一个练习技巧或一个引导尝试下一步的提示结尾。`;
           case 'fr-FR':
             return `${base} Please respond in French.`;
           case 'es-ES':

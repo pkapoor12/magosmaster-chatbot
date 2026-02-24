@@ -80,54 +80,39 @@ export const useTTS = (): UseTTSReturn => {
     try {
       console.log('🌍 Setting TTS language to:', language);
       setCurrentLanguage(language);
+      
+      // 1. Set the default language/locale
       await Tts.setDefaultLanguage(language);
       
       const voices = await Tts.voices();
-      console.log('🎤 Available voices:', voices.length);
-      
-      // Log first few voices for debugging
-      if (voices.length > 0) {
-        console.log('📋 First voice:', JSON.stringify({
-          id: voices[0].id,
-          name: voices[0].name,
-          language: voices[0].language,
-          notInstalled: voices[0].notInstalled
-        }));
-      }
-      
       const availableVoices = voices.filter((v: any) => !v.notInstalled);
-      console.log('✅ Installed voices:', availableVoices.length);
-      
-      if (availableVoices.length === 0) {
-        console.warn('⚠️ No installed voices found!');
-        return;
-      }
-      
-      // Try to find a male voice for this language
+
+      if (availableVoices.length === 0) return;
+
+      // 2. Optimized Selection Logic
       let selectedVoice = availableVoices.find((v: any) => {
-        const name = v.name.toLowerCase();
-        return (v.language === language || v.language?.startsWith(language.split('-')[0])) && 
-               (name.includes('male') || name.includes('david') || name.includes('aaron'));
+        const voiceLang = v.language.toLowerCase().replace('_', '-');
+        const targetLang = language.toLowerCase();
+        
+        // Specifically look for 'zh-hk' or 'yue-hk' to avoid Mandarin 'zh-cn'
+        if (targetLang === 'zh-hk') {
+          return voiceLang === 'zh-hk' || voiceLang.includes('yue');
+        }
+        
+        return voiceLang === targetLang;
       });
 
-      // If no male voice, try to find any voice for this language
+      // 3. Fallback: If no perfect match, find any voice with the specific country code
       if (!selectedVoice) {
-        console.log('ℹ️ No male voice found, looking for any voice for language:', language);
+        const countryCode = language.split('-')[1]?.toLowerCase(); // e.g., 'hk'
         selectedVoice = availableVoices.find((v: any) => 
-          v.language === language || v.language?.startsWith(language.split('-')[0])
+          v.language.toLowerCase().includes(countryCode)
         );
       }
 
-      // If still no voice, just use the first available voice
-      if (!selectedVoice) {
-        console.log('ℹ️ No voice found for language, using first available voice');
-        selectedVoice = availableVoices[0];
-      }
-
       if (selectedVoice) {
-        console.log('🎤 Setting voice to:', selectedVoice.id, selectedVoice.name);
+        console.log('🎤 Setting Cantonese Voice:', selectedVoice.id);
         await Tts.setDefaultVoice(selectedVoice.id);
-        console.log('✅ Voice set successfully');
       }
     } catch (error) {
       console.warn('Error setting TTS language/voice:', error);
